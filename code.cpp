@@ -294,7 +294,71 @@ int main(){
             else { trainsArr[ti].exists=false; cout<<0<<"\n"; }
         }else if(cmd=="query_ticket"){
             string rest; getline(cin, rest);
-            cout<<0<<"\n";
+            string par, S, T, sd, pkey="time"; istringstream iss(rest);
+            while(iss>>par){ if(par=="-s") iss>>S; else if(par=="-t") iss>>T; else if(par=="-d") iss>>sd; else if(par=="-p") iss>>pkey; }
+            int qm, qd; if(!parseDate(sd, qm, qd)){ cout<<0<<"\n"; continue; }
+            // collect candidates only among released trains
+            const int MAXR = MAX_TRAINS;
+            string rid[MAXR]; int rti[MAXR]; int rf[MAXR]; int rt_[MAXR];
+            long long rDepAbs[MAXR]; long long rArrAbs[MAXR]; long long rPrice[MAXR]; int rSeat[MAXR]; int rcnt=0;
+            int qDayIndex = monthBaseDays(qm)+(qd-1);
+            for(int ti=0; ti<trainCount; ++ti){
+                Train &t = trainsArr[ti]; if(!t.exists || !t.released) continue;
+                int fi=-1, tii=-1; for(int i=0;i<t.stationNum;i++){ if(t.stations[i]==S){ fi=i; break; } }
+                if(fi==-1) continue;
+                for(int j=fi+1;j<t.stationNum;j++){ if(t.stations[j]==T){ tii=j; break; } }
+                if(tii==-1) continue;
+                long long baseMin = t.startH*60 + t.startM;
+                long long departOffset=0; for(int k=0;k<fi;k++){ departOffset += t.travel[k]; if(k<t.stationNum-2) departOffset += t.stopover[k]; }
+                long long arrivalOffset=0; for(int k=0;k<tii;k++){ arrivalOffset += t.travel[k]; if(k<t.stationNum-2) arrivalOffset += t.stopover[k]; }
+                long long departAbsMin = baseMin + departOffset;
+                long long departOffsetDays = departAbsMin/1440;
+                long long startDayIndex = qDayIndex - departOffsetDays;
+                int from = monthBaseDays(t.saleFromM)+(t.saleFromD-1);
+                int to   = monthBaseDays(t.saleToM)+(t.saleToD-1);
+                if(startDayIndex < from || startDayIndex > to) continue;
+                long long arriveAbsMin = baseMin + arrivalOffset;
+                long long rDepAbsMinTotal = startDayIndex*1440 + departAbsMin;
+                long long rArrAbsMinTotal = startDayIndex*1440 + arriveAbsMin;
+                long long price=0; for(int k=fi;k<tii;k++) price += t.prices[k];
+                int seat = t.seatNum; // no booking logic implemented
+                rid[rcnt]=t.id; rti[rcnt]=ti; rf[rcnt]=fi; rt_[rcnt]=tii; rDepAbs[rcnt]=rDepAbsMinTotal; rArrAbs[rcnt]=rArrAbsMinTotal; rPrice[rcnt]=price; rSeat[rcnt]=seat; rcnt++;
+            }
+            // sort
+            for(int i=0;i<rcnt;i++){
+                int best=i;
+                for(int j=i+1;j<rcnt;j++){
+                    bool better=false;
+                    if(pkey=="cost"){
+                        if(rPrice[j]<rPrice[best]) better=true;
+                        else if(rPrice[j]==rPrice[best] && rid[j]<rid[best]) better=true;
+                    }else{ // time
+                        long long di_best = rArrAbs[best]-rDepAbs[best];
+                        long long di_j = rArrAbs[j]-rDepAbs[j];
+                        if(di_j<di_best) better=true;
+                        else if(di_j==di_best && rid[j]<rid[best]) better=true;
+                    }
+                    if(better) best=j;
+                }
+                if(best!=i){
+                    swap(rid[best], rid[i]); swap(rti[best], rti[i]); swap(rf[best], rf[i]); swap(rt_[best], rt_[i]); swap(rDepAbs[best], rDepAbs[i]); swap(rArrAbs[best], rArrAbs[i]); swap(rPrice[best], rPrice[i]); swap(rSeat[best], rSeat[i]);
+                }
+            }
+            cout<<rcnt<<"\n";
+            for(int i=0;i<rcnt;i++){
+                // format times
+                int dm,dd,dh,dmi,am,ad,ah,ami;
+                long long depDayIndex = rDepAbs[i]/1440; int depMinOfDay = (int)(rDepAbs[i]%1440);
+                long long arrDayIndex = rArrAbs[i]/1440; int arrMinOfDay = (int)(rArrAbs[i]%1440);
+                // map dayIndex to mm-dd
+                auto mapDay=[&](long long dIndex, int &om, int &od){ if(dIndex<30){ om=6; od=(int)dIndex+1; } else if(dIndex<61){ om=7; od=(int)(dIndex-30)+1; } else { om=8; od=(int)(dIndex-61)+1; } };
+                mapDay(depDayIndex, dm, dd); mapDay(arrDayIndex, am, ad);
+                dh = depMinOfDay/60; dmi = depMinOfDay%60; ah = arrMinOfDay/60; ami = arrMinOfDay%60;
+                Train &t = trainsArr[rti[i]];
+                cout<<rid[i]<<' '<<t.stations[rf[i]]<<' '<<(dm<10?"0":"")<<dm<<'-'<<(dd<10?"0":"")<<dd<<' '<<(dh<10?"0":"")<<dh<<':'<<(dmi<10?"0":"")<<dmi
+                    <<" -> "<<t.stations[rt_[i]]<<' '<<(am<10?"0":"")<<am<<'-'<<(ad<10?"0":"")<<ad<<' '<<(ah<10?"0":"")<<ah<<':'<<(ami<10?"0":"")<<ami
+                    <<' '<<rPrice[i]<<' '<<rSeat[i]<<"\n";
+            }
         }else if(cmd=="query_transfer"){
             string rest; getline(cin, rest);
             cout<<0<<"\n";

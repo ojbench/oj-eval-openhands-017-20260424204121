@@ -348,7 +348,7 @@ int main(){
                     cout<< (depM<10?"0":"")<<depM<<'-'<<(depD<10?"0":"")<<depD<<' '<<(depH<10?"0":"")<<depH<<':'<<(depMi<10?"0":"")<<depMi<<' ';
                     int dayIdx = monthBaseDays(qm)+(qd-1);
                     int seatsLeft = t.seatNum;
-                    if(t.seats){ for(int seg=0; seg<t.segments; ++seg){ int idx = (dayIdx - t.saleFromIndex)*t.segments + seg; if(idx>=0 && idx<t.days*t.segments){ seatsLeft = t.seats[idx]; break; } } }
+                    if(t.seats){ int idx = seatIndex(t, dayIdx, 0); if(idx>=0) seatsLeft = t.seats[idx]; }
                     cout<<0<<' '<<seatsLeft<<"\n";
                 }else if(i==t.stationNum-1){
                     // arrival after last travel

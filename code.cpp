@@ -44,6 +44,9 @@ struct Train {
     int stopover[105]; // size stationNum-2
     int startH=0, startM=0;
     int saleFromM=6, saleFromD=1, saleToM=8, saleToD=31;
+    int saleFromIndex=0, saleToIndex=0; // absolute day indices
+    int segments=0, days=0;
+    int *seats=nullptr; // seats[days*segments], remaining seats per segment per day
     char type='G';
     bool exists=false;
     bool released=false;
@@ -52,6 +55,26 @@ struct Train {
 static const int MAX_TRAINS = 2000;
 Train trainsArr[MAX_TRAINS];
 int trainCount = 0;
+
+// Orders
+struct Order {
+    int userIdx=-1;
+    int trainIdx=-1;
+    int dayStartIndex=0; // absolute day index of train starting day (start station departure day)
+    int fromIdx=0;
+    int toIdx=0;
+    int num=0;
+    long long price=0;
+    int status=0; // 0=pending,1=success,2=refunded
+    long long ts=0; // increasing timestamp
+    bool exists=false;
+};
+
+static const int MAX_ORDERS = 200000;
+Order ordersArr[MAX_ORDERS];
+int orderCount=0;
+long long tsCounter=0;
+
 
 int findTrain(const string &tid){
     for(int i=0;i<trainCount;i++) if(trainsArr[i].exists && trainsArr[i].id==tid) return i;
@@ -72,9 +95,51 @@ bool parseDate(const string &s, int &m, int &d){
 bool parseTime(const string &s, int &h, int &mi){
     if(s.size()!=5 || s[2] != ':') return false;
     h = atoi(s.substr(0,2).c_str());
+
     mi = atoi(s.substr(3,2).c_str());
     return true;
 }
+
+int seatIndex(const Train &t, int dayIndex, int seg){
+    int di = dayIndex - t.saleFromIndex;
+    if(di<0 || di>=t.days) return -1;
+    if(seg<0 || seg>=t.segments) return -1;
+    return di*t.segments + seg;
+}
+
+int minSeatsOnRange(const Train &t, int startDayIndex, int fromIdx, int toIdx){
+    if(!t.seats) return t.seatNum;
+    int mn = t.seatNum;
+    for(int seg=fromIdx; seg<toIdx; ++seg){
+        int idx = seatIndex(t, startDayIndex, seg);
+        if(idx<0) return 0;
+        if(t.seats[idx] < mn) mn = t.seats[idx];
+    }
+    return mn;
+}
+
+void addSeatsOnRange(Train &t, int startDayIndex, int fromIdx, int toIdx, int delta){
+    if(!t.seats) return;
+    for(int seg=fromIdx; seg<toIdx; ++seg){
+        int idx = seatIndex(t, startDayIndex, seg);
+        if(idx>=0) t.seats[idx] += delta;
+    }
+}
+
+long long singleTicketPrice(const Train &t, int fromIdx, int toIdx){
+    long long price=0; for(int k=fromIdx; k<toIdx; ++k) price += t.prices[k]; return price;
+}
+
+long long departOffsetMinutes(const Train &t, int fi){
+    long long off=0; for(int k=0;k<fi;k++){ off += t.travel[k]; if(k<fi && k<t.stationNum-2) off += t.stopover[k]; }
+    return off;
+}
+
+long long arriveOffsetMinutes(const Train &t, int tii){
+    long long off=0; for(int k=0;k<tii;k++){ off += t.travel[k]; if(k<tii-1 && k<t.stationNum-2) off += t.stopover[k]; }
+    return off;
+}
+
 
 void addMinutesToDate(int baseM, int baseD, int baseH, int baseMi, long long addMin, int &outM, int &outD, int &outH, int &outMi){
     long long baseDayIndex = monthBaseDays(baseM) + (baseD - 1);
@@ -223,6 +288,8 @@ int main(){
                 if(pos==string::npos){ cout<<-1<<"\n"; continue; }
                 string a = s_sale.substr(0,pos), b = s_sale.substr(pos+1);
                 if(!parseDate(a, t.saleFromM, t.saleFromD) || !parseDate(b, t.saleToM, t.saleToD)){ cout<<-1<<"\n"; continue; }
+                t.saleFromIndex = monthBaseDays(t.saleFromM)+(t.saleFromD-1);
+                t.saleToIndex = monthBaseDays(t.saleToM)+(t.saleToD-1);
             }
             // parse stations
             int cnt=0;{
@@ -253,7 +320,17 @@ int main(){
             string rest; getline(cin, rest); string par, tid; istringstream iss(rest); while(iss>>par){ if(par=="-i") iss>>tid; }
             int ti = findTrain(tid);
             if(ti==-1 || trainsArr[ti].released){ cout<<-1<<"\n"; }
-            else { trainsArr[ti].released=true; cout<<0<<"\n"; }
+            else { 
+                Train &t = trainsArr[ti];
+                t.released=true; 
+                t.segments = t.stationNum-1;
+                t.days = t.saleToIndex - t.saleFromIndex + 1;
+                int total = t.days * t.segments;
+                if(total<0) total=0; if(total>10000000) total=10000000; // safety cap
+                t.seats = (total? (int*)malloc(sizeof(int)*total): nullptr);
+                for(int i=0;i<total;i++) t.seats[i] = t.seatNum;
+                cout<<0<<"\n"; 
+            }
         }else if(cmd=="query_train"){
             string rest; getline(cin, rest); string par, tid, sd; istringstream iss(rest); while(iss>>par){ if(par=="-i") iss>>tid; else if(par=="-d") iss>>sd; }
             int ti = findTrain(tid);
@@ -269,7 +346,10 @@ int main(){
                     addMinutesToDate(qm, qd, t.startH, t.startM, 0, depM,depD,depH,depMi);
                     cout<<t.stations[i]<<" xx-xx xx:xx -> ";
                     cout<< (depM<10?"0":"")<<depM<<'-'<<(depD<10?"0":"")<<depD<<' '<<(depH<10?"0":"")<<depH<<':'<<(depMi<10?"0":"")<<depMi<<' ';
-                    cout<<0<<' '<<t.seatNum<<"\n";
+                    int dayIdx = monthBaseDays(qm)+(qd-1);
+                    int seatsLeft = t.seatNum;
+                    if(t.seats){ for(int seg=0; seg<t.segments; ++seg){ int idx = (dayIdx - t.saleFromIndex)*t.segments + seg; if(idx>=0 && idx<t.days*t.segments){ seatsLeft = t.seats[idx]; break; } } }
+                    cout<<0<<' '<<seatsLeft<<"\n";
                 }else if(i==t.stationNum-1){
                     // arrival after last travel
                     minutes += t.travel[i-1];
@@ -283,7 +363,12 @@ int main(){
                     addMinutesToDate(qm, qd, t.startH, t.startM, minutes, depM,depD,depH,depMi);
                     cout<<t.stations[i]<<' '<<(arrM<10?"0":"")<<arrM<<'-'<<(arrD<10?"0":"")<<arrD<<' '<<(arrH<10?"0":"")<<arrH<<':'<<(arrMi<10?"0":"")<<arrMi<<" -> ";
                     cout<<(depM<10?"0":"")<<depM<<'-'<<(depD<10?"0":"")<<depD<<' '<<(depH<10?"0":"")<<depH<<':'<<(depMi<10?"0":"")<<depMi<<' ';
-                    cout<<accPrice<<' '<<t.seatNum<<"\n";
+                    int dayIdx = monthBaseDays(qm)+(qd-1);
+                    // ensure seat index for segment i refers to segment between station i and i+1
+
+                    int seatsLeft = t.seatNum;
+                    if(t.seats){ int idx = seatIndex(t, dayIdx, i); if(idx>=0) seatsLeft = t.seats[idx]; }
+                    cout<<accPrice<<' '<<seatsLeft<<"\n";
                 }
                 if(i<t.stationNum-1) accPrice += t.prices[i];
             }
@@ -309,19 +394,17 @@ int main(){
                 for(int j=fi+1;j<t.stationNum;j++){ if(t.stations[j]==T){ tii=j; break; } }
                 if(tii==-1) continue;
                 long long baseMin = t.startH*60 + t.startM;
-                long long departOffset=0; for(int k=0;k<fi;k++){ departOffset += t.travel[k]; if(k<fi && k<t.stationNum-2) departOffset += t.stopover[k]; }
-                long long arrivalOffset=0; for(int k=0;k<tii;k++){ arrivalOffset += t.travel[k]; if(k<tii-1 && k<t.stationNum-2) arrivalOffset += t.stopover[k]; }
+                long long departOffset = departOffsetMinutes(t, fi);
+                long long arrivalOffset = arriveOffsetMinutes(t, tii);
                 long long departAbsMin = baseMin + departOffset;
                 long long departOffsetDays = departAbsMin/1440;
                 long long startDayIndex = qDayIndex - departOffsetDays;
-                int from = monthBaseDays(t.saleFromM)+(t.saleFromD-1);
-                int to   = monthBaseDays(t.saleToM)+(t.saleToD-1);
-                if(startDayIndex < from || startDayIndex > to) continue;
+                if(startDayIndex < t.saleFromIndex || startDayIndex > t.saleToIndex) continue;
                 long long arriveAbsMin = baseMin + arrivalOffset;
                 long long rDepAbsMinTotal = startDayIndex*1440 + departAbsMin;
                 long long rArrAbsMinTotal = startDayIndex*1440 + arriveAbsMin;
-                long long price=0; for(int k=fi;k<tii;k++) price += t.prices[k];
-                int seat = t.seatNum; // no booking logic implemented
+                long long price= singleTicketPrice(t, fi, tii);
+                int seat = minSeatsOnRange(t, startDayIndex, fi, tii);
                 rid[rcnt]=t.id; rti[rcnt]=ti; rf[rcnt]=fi; rt_[rcnt]=tii; rDepAbs[rcnt]=rDepAbsMinTotal; rArrAbs[rcnt]=rArrAbsMinTotal; rPrice[rcnt]=price; rSeat[rcnt]=seat; rcnt++;
             }
             // sort
@@ -358,6 +441,102 @@ int main(){
                 cout<<rid[i]<<' '<<t.stations[rf[i]]<<' '<<(dm<10?"0":"")<<dm<<'-'<<(dd<10?"0":"")<<dd<<' '<<(dh<10?"0":"")<<dh<<':'<<(dmi<10?"0":"")<<dmi
                     <<" -> "<<t.stations[rt_[i]]<<' '<<(am<10?"0":"")<<am<<'-'<<(ad<10?"0":"")<<ad<<' '<<(ah<10?"0":"")<<ah<<':'<<(ami<10?"0":"")<<ami
                     <<' '<<rPrice[i]<<' '<<rSeat[i]<<"\n";
+            }
+        }else if(cmd=="buy_ticket"){
+            string rest; getline(cin, rest);
+            string par, u, tid, sd, fs, ts; int n=0; string qs="false";
+            istringstream iss(rest);
+            while(iss>>par){
+                if(par=="-u") iss>>u; else if(par=="-i") iss>>tid; else if(par=="-d") iss>>sd; else if(par=="-n"){ string ns; iss>>ns; n=atoi(ns.c_str()); } else if(par=="-f") iss>>fs; else if(par=="-t") iss>>ts; else if(par=="-q") iss>>qs;
+            }
+            int ui = findUser(u);
+            if(ui==-1 || !usersArr[ui].online){ cout<<-1<<"\n"; continue; }
+            int ti = findTrain(tid);
+            if(ti==-1 || !trainsArr[ti].released){ cout<<-1<<"\n"; continue; }
+            Train &t = trainsArr[ti];
+            int fi=-1, tii=-1; for(int i=0;i<t.stationNum;i++){ if(t.stations[i]==fs){ fi=i; break; }}
+            if(fi==-1){ cout<<-1<<"\n"; continue; }
+            for(int j=fi+1;j<t.stationNum;j++){ if(t.stations[j]==ts){ tii=j; break; }}
+            if(tii==-1){ cout<<-1<<"\n"; continue; }
+            int qm, qd; if(!parseDate(sd, qm, qd)){ cout<<-1<<"\n"; continue; }
+            long long baseMin = t.startH*60 + t.startM;
+            long long departAbsMin = baseMin + departOffsetMinutes(t, fi);
+            long long departOffsetDays = departAbsMin/1440;
+            int qDayIndex = monthBaseDays(qm)+(qd-1);
+            int startDayIndex = (int)(qDayIndex - departOffsetDays);
+            if(startDayIndex < t.saleFromIndex || startDayIndex > t.saleToIndex){ cout<<-1<<"\n"; continue; }
+            int avail = minSeatsOnRange(t, startDayIndex, fi, tii);
+            long long price1 = singleTicketPrice(t, fi, tii);
+            if(avail >= n){
+                addSeatsOnRange(t, startDayIndex, fi, tii, -n);
+                // create success order
+                if(orderCount<MAX_ORDERS){
+                    Order &o = ordersArr[orderCount++];
+                    o.userIdx=ui; o.trainIdx=ti; o.dayStartIndex=startDayIndex; o.fromIdx=fi; o.toIdx=tii; o.num=n; o.price=price1; o.status=1; o.ts=++tsCounter; o.exists=true;
+                }
+                cout<< (long long)(price1 * n) <<"\n";
+            }else{
+                if(qs=="true"){
+                    if(orderCount<MAX_ORDERS){
+                        Order &o = ordersArr[orderCount++];
+                        o.userIdx=ui; o.trainIdx=ti; o.dayStartIndex=startDayIndex; o.fromIdx=fi; o.toIdx=tii; o.num=n; o.price=price1; o.status=0; o.ts=++tsCounter; o.exists=true;
+                    }
+                    cout<<"queue\n";
+                }else{
+                    cout<<-1<<"\n";
+                }
+            }
+        }else if(cmd=="query_order"){
+            string rest; getline(cin, rest); string par,u; istringstream iss(rest); while(iss>>par){ if(par=="-u") iss>>u; }
+            int ui = findUser(u);
+            if(ui==-1 || !usersArr[ui].online){ cout<<-1<<"\n"; continue; }
+            // count orders for user
+            int cnt=0; for(int i=0;i<orderCount;i++){ if(ordersArr[i].exists && ordersArr[i].userIdx==ui) cnt++; }
+            cout<<cnt<<"\n";
+            for(int i=orderCount-1;i>=0;i--){
+                if(!(ordersArr[i].exists && ordersArr[i].userIdx==ui)) continue;
+                Order &o = ordersArr[i]; Train &t = trainsArr[o.trainIdx];
+                // compute times
+                long long baseMin = t.startH*60 + t.startM;
+                long long departAbsMin = baseMin + departOffsetMinutes(t, o.fromIdx);
+                long long arriveAbsMin = baseMin + arriveOffsetMinutes(t, o.toIdx);
+                long long depTotal = (long long)o.dayStartIndex*1440 + departAbsMin;
+                long long arrTotal = (long long)o.dayStartIndex*1440 + arriveAbsMin;
+                auto mapDay=[&](long long dIndex, int &om, int &od){ if(dIndex<30){ om=6; od=(int)dIndex+1; } else if(dIndex<61){ om=7; od=(int)(dIndex-30)+1; } else { om=8; od=(int)(dIndex-61)+1; } };
+                int dm,dd,dh,dmi,am,ad,ah,ami; long long depDayIndex = depTotal/1440; int depMinOfDay=(int)(depTotal%1440); long long arrDayIndex=arrTotal/1440; int arrMinOfDay=(int)(arrTotal%1440);
+                mapDay(depDayIndex, dm, dd); mapDay(arrDayIndex, am, ad);
+                dh=depMinOfDay/60; dmi=depMinOfDay%60; ah=arrMinOfDay/60; ami=arrMinOfDay%60;
+                const char *st = (o.status==1? "success" : (o.status==0? "pending" : "refunded"));
+                cout<<'['<<st<<"] "<<t.id<<' '<<t.stations[o.fromIdx]<<' '<<(dm<10?"0":"")<<dm<<'-'<<(dd<10?"0":"")<<dd<<' '<<(dh<10?"0":"")<<dh<<':'<<(dmi<10?"0":"")<<dmi
+                    <<" -> "<<t.stations[o.toIdx]<<' '<<(am<10?"0":"")<<am<<'-'<<(ad<10?"0":"")<<ad<<' '<<(ah<10?"0":"")<<ah<<':'<<(ami<10?"0":"")<<ami
+                    <<' '<<o.price<<' '<<o.num<<"\n";
+            }
+        }else if(cmd=="refund_ticket"){
+            string rest; getline(cin, rest); string par,u; int nth=1; istringstream iss(rest); while(iss>>par){ if(par=="-u") iss>>u; else if(par=="-n"){ string ns; iss>>ns; nth=atoi(ns.c_str()); } }
+            int ui = findUser(u);
+            if(ui==-1 || !usersArr[ui].online){ cout<<-1<<"\n"; continue; }
+            // locate nth order from newest to oldest
+            int countIdx=0; int target=-1;
+            for(int i=orderCount-1;i>=0;i--){ if(ordersArr[i].exists && ordersArr[i].userIdx==ui){ countIdx++; if(countIdx==nth){ target=i; break; } } }
+            if(target==-1){ cout<<-1<<"\n"; continue; }
+            Order &o = ordersArr[target];
+            if(o.status==2){ cout<<-1<<"\n"; continue; }
+            if(o.status==0){ // pending -> refunded
+                o.status=2; cout<<0<<"\n";
+            }else if(o.status==1){
+                // success -> refund seats then try fulfill pending
+                Train &t = trainsArr[o.trainIdx];
+                addSeatsOnRange(t, o.dayStartIndex, o.fromIdx, o.toIdx, o.num);
+                o.status=2; cout<<0<<"\n";
+                // fulfill pending in FIFO
+                for(int pass=0; pass<2; ++pass){ // two passes are usually enough given updates
+                    for(int i=0;i<orderCount;i++){
+                        if(!ordersArr[i].exists) continue; Order &q=ordersArr[i]; if(q.status!=0) continue;
+                        Train &tt = trainsArr[q.trainIdx];
+                        int avail = minSeatsOnRange(tt, q.dayStartIndex, q.fromIdx, q.toIdx);
+                        if(avail >= q.num){ addSeatsOnRange(tt, q.dayStartIndex, q.fromIdx, q.toIdx, -q.num); q.status=1; }
+                    }
+                }
             }
         }else if(cmd=="query_transfer"){
             string rest; getline(cin, rest);

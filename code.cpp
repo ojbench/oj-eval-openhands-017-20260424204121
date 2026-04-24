@@ -309,8 +309,8 @@ int main(){
                 for(int j=fi+1;j<t.stationNum;j++){ if(t.stations[j]==T){ tii=j; break; } }
                 if(tii==-1) continue;
                 long long baseMin = t.startH*60 + t.startM;
-                long long departOffset=0; for(int k=0;k<fi;k++){ departOffset += t.travel[k]; if(k<t.stationNum-2) departOffset += t.stopover[k]; }
-                long long arrivalOffset=0; for(int k=0;k<tii;k++){ arrivalOffset += t.travel[k]; if(k<t.stationNum-2) arrivalOffset += t.stopover[k]; }
+                long long departOffset=0; for(int k=0;k<fi;k++){ departOffset += t.travel[k]; if(k<fi && k<t.stationNum-2) departOffset += t.stopover[k]; }
+                long long arrivalOffset=0; for(int k=0;k<tii;k++){ arrivalOffset += t.travel[k]; if(k<tii-1 && k<t.stationNum-2) arrivalOffset += t.stopover[k]; }
                 long long departAbsMin = baseMin + departOffset;
                 long long departOffsetDays = departAbsMin/1440;
                 long long startDayIndex = qDayIndex - departOffsetDays;
